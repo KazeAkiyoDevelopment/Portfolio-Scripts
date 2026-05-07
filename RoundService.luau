@@ -1,7 +1,7 @@
 -- Connected Discord-GitHub
 
 local roundService = {}
--- Connected Discord-GitHub
+
 -- Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
