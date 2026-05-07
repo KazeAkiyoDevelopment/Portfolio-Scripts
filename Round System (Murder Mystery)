@@ -1,12 +1,16 @@
 local roundService = {}
 
+-- Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local ServerScriptService = game:GetService("ServerScriptService")
 local ServerStorage = game:GetService("ServerStorage")
 
+-- Configs
 local RoundConfig = require(ReplicatedStorage.Shared.Configs.RoundConfig)
+
+-- Shared data (Server)
 local RoundData  = require(ServerScriptService.Data.RoundData)
 
 local SpectateService
@@ -36,6 +40,7 @@ function roundService:_ragdollCharacter(character: Model)
 			attachment0.Parent = motor.Part0
 			attachment1.Parent = motor.Part1
 
+			-- Create the constraint to ragdoll the cloned character
 			local constraint = Instance.new("BallSocketConstraint")
 			constraint.Attachment0 = attachment0
 			constraint.Attachment1 = attachment1
@@ -50,6 +55,7 @@ function roundService:_ragdollCharacter(character: Model)
 		end
 	end
 
+	-- Set up the cloned character 
 	for _, v in ipairs(character:GetDescendants()) do
 		if v:IsA("BasePart") then
 			v.Anchored = false
@@ -59,10 +65,11 @@ function roundService:_ragdollCharacter(character: Model)
 		end
 	end
 	
-	character:PivotTo(character:GetPivot() + Vector3.new(0, 3, 0)) -- Set it above the ground and gravity will pull it back down
+	character:PivotTo(character:GetPivot() + Vector3.new(0, 3, 0)) -- Set the cloned character above the ground to prevent no-clipping
 end
 
 function roundService:_cleanUpRound()
+	-- Clean up all players' weapons
 	for _, player in pairs(RoundData.ActivePlayers) do
 		local weapon = if player.Character then player.Character:FindFirstChildOfClass("Tool") else nil  
 
@@ -72,40 +79,48 @@ function roundService:_cleanUpRound()
 
 		player.Backpack:ClearAllChildren()
 	end
-	
+
+	-- Clean up all ragdoll models
 	for _, ragdollModel in ipairs(CollectionService:GetTagged("Ragdoll")) do
 		ragdollModel:Destroy()
 	end
 
+	-- Reset voting variables to default
 	for _, button in ipairs(CollectionService:GetTagged("VoteButton")) do
 		button:SetAttribute("AssignedMap", "None")
 		button:SetAttribute("Votes", 0)
 	end
-	
+
+	-- Clean up gun drop
 	if next(CollectionService:GetTagged("GunDrop")) then
 		CollectionService:GetTagged("GunDrop")[1]:Destroy()
 	end
-	
+
+	-- Clean up active map
 	if next(CollectionService:GetTagged("ActiveMap")) then
 		CollectionService:GetTagged("ActiveMap")[1]:Destroy()
 	end
-	
+
+	-- Disable all players' spectating
 	for _, player in Players:GetPlayers() do
 		if player:GetAttribute("Spectating") then
 			SpectateService:EndSpectate(player)
 		end
 	end
-	
+
+	-- Wipe the current round data 
 	RoundData:Wipe()
 end
 
-function roundService:RemovePlayerFromRound(player: Player, ragdoll: boolean, dropGun: boolean)
+function roundService:RemovePlayerFromRound(player: Player, ragdoll: boolean, dropGun: boolean) -- Removes a player from the active round, optionally spawning a ragdoll and dropping the sheriff's gun at their last position
+	-- Get the player's index
 	local playerIndex = table.find(RoundData.ActivePlayers, player)
 	if not playerIndex then return end
 	
 	local character = player.Character 
 	if not character then player:Kick("Error loading character, please rejoin!") return end
-	
+
+	-- Save the last CFrame
 	local lastCFrame = character:GetPivot()
 	
 	local weapon = player.Character:FindFirstChildOfClass("Tool")
@@ -119,7 +134,7 @@ function roundService:RemovePlayerFromRound(player: Player, ragdoll: boolean, dr
 	
 	player:LoadCharacterAsync()
 	
-	task.spawn(function()
+	task.spawn(function() -- Create the cloned character for the ragdoll effect
 		if ragdoll then
 			character.Archivable = true
 
@@ -134,14 +149,15 @@ function roundService:RemovePlayerFromRound(player: Player, ragdoll: boolean, dr
 			character.Archivable = false
 		end
 	end)
-	
+
+	-- If the player is the sheriff then we will run the gun drop function
 	if dropGun then
 		self:_processGunDrop(player, character)
 	end
 end
 
 function roundService:_getButtonFromAssignedMap(assignedMap: string)
-	for _, button in ipairs(CollectionService:GetTagged("VoteButton")) do
+	for _, button in ipairs(CollectionService:GetTagged("VoteButton")) do -- Loop through all the vote buttons and return the button with the specified map
 		if button:GetAttribute("AssignedMap") == assignedMap then
 			return button
 		end
@@ -150,7 +166,7 @@ end
 
 function roundService:_assignMapsToVoteButtons()
 	RoundData.MapOptions = Maps:GetChildren()
-	RoundData.AvailableMaps = RoundData.MapOptions
+	RoundData.AvailableMaps = RoundData.MapOptions 
 	
 	for index, button in ipairs(CollectionService:GetTagged("VoteButton")) do
 		local map = RoundData.AvailableMaps[math.random(1, #RoundData.AvailableMaps)]
@@ -166,13 +182,13 @@ end
 function roundService:_monitorVotes()
 	for index, button in ipairs(CollectionService:GetTagged("VoteButton")) do
 		button.Touched:Connect(function(hit)
-			if RoundData.RoundState ~= "Vote" then return end
+			if RoundData.RoundState ~= "Vote" then return end -- Guard to check if the round is in the voting phase
 
 			local player = Players:GetPlayerFromCharacter(hit.Parent)
 			if not player then return end
 			
-			if RoundData.VoteRegistry[player] == button:GetAttribute("AssignedMap") then return end
-			if RoundData.VoteRegistry[player] ~= nil then
+			if RoundData.VoteRegistry[player] == button:GetAttribute("AssignedMap") then return end -- Guard to check if the player is trying to vote for the same map
+			if RoundData.VoteRegistry[player] ~= nil then -- If they are voting for a new map then we remove their previous vote before registering their new vote
 				local previousButton = self:_getButtonFromAssignedMap(RoundData.VoteRegistry[player])
 				if previousButton then
 					previousButton:SetAttribute("Votes", previousButton:GetAttribute("Votes") - 1)
@@ -182,7 +198,7 @@ function roundService:_monitorVotes()
 			RoundData.VoteRegistry[player] = button:GetAttribute("AssignedMap")
 			button:SetAttribute("Votes", button:GetAttribute("Votes") + 1)
 		end)
-		
+		-- BillBoard GUI related
 		local mapInfo = button.MapDisplay.MapInfo
 
 		button:GetAttributeChangedSignal("AssignedMap"):Connect(function()
@@ -203,7 +219,7 @@ function roundService:_monitorPlayerDeaths()
 		monitoredPlayers[player] = true
 
 		player.CharacterAdded:Connect(function(character)	
-			for _, v in ipairs(character:GetDescendants()) do
+			for _, v in ipairs(character:GetDescendants()) do 
 				if v:IsA("BasePart") then
 					v.CollisionGroup = "Player"
 				end
@@ -211,8 +227,8 @@ function roundService:_monitorPlayerDeaths()
 			
 			character.Humanoid.Died:Connect(function()
 				if RoundData.RoundState == "Round" then
-					if RoundData.RoleRegistry[player] == "Sheriff" then
-						self:RemovePlayerFromRound(player, true, true)
+					if RoundData.RoleRegistry[player] == "Sheriff" then 
+						self:RemovePlayerFromRound(player, true, true) -- Run the gun drop function
 					else
 						self:RemovePlayerFromRound(player, true)
 					end
@@ -241,7 +257,7 @@ function roundService:_getWinningMap()
 
 	local highestVotes = 0
 	
-	for _, count in pairs(voteTally) do
+	for _, count in pairs(voteTally) do 
 		if count > highestVotes then
 			highestVotes = count
 		end
@@ -255,7 +271,7 @@ function roundService:_getWinningMap()
 		end
 	end
 
-	return mapsRanked[math.random(1, #mapsRanked)]
+	return mapsRanked[math.random(1, #mapsRanked)] -- Returns the map at index 1 (the highest voted as its an array)
 end
 
 function roundService:_processGunDrop(player: Player, character: Model)
@@ -276,16 +292,16 @@ end
 
 function roundService:_assignRoles()
 	local weightPool = {}
-	local unassignedRoles = {"Murderer", "Sheriff"}
+	local unassignedRoles = {"Murderer", "Sheriff"} --
 
 	for _, player in RoundData.ActivePlayers do
-		local chanceMultiplier = RoundData.RoundsPlayed[player]
+		local chanceMultiplier = RoundData.RoundsPlayed[player] -- Increases the probability of getting a role based on the amount of rounds played
 		local baseWeight = 1  /#RoundData.ActivePlayers
 		
 		weightPool[player] = baseWeight * chanceMultiplier
 	end
 
-	for _, role in ipairs(unassignedRoles) do
+	for _, role in ipairs(unassignedRoles) do --Weight assigning 
 		local total = 0
 		
 		for _, weight in pairs(weightPool) do
@@ -305,16 +321,16 @@ function roundService:_assignRoles()
 		end
 	end
 	
-	for _, player in RoundData.ActivePlayers do
+	for _, player in RoundData.ActivePlayers do -- Sets the role for the rest of the players to the default
 		if not RoundData.RoleRegistry[player] then
 			RoundData.RoleRegistry[player] = "Innocent"
 		end
 	end
 end
 
-function roundService:_updateRoundStateLabel(state: string, filterPlayers: boolean)
+function roundService:_updateRoundStateLabel(state: string, filterPlayers: boolean) -- Fires a client event to update the round label GUI
 	if filterPlayers then
-		RoundRemotes.UpdateRoundStateLabel:FireAllClients(state, RoundData.ActivePlayers)
+		RoundRemotes.UpdateRoundStateLabel:FireAllClients(state, RoundData.ActivePlayers) -- Only shows to the Round ActivePlayers (Such as not showing the timer for player's in the Lobby)
 	else
 		RoundRemotes.UpdateRoundStateLabel:FireAllClients(state)
 	end
@@ -357,7 +373,7 @@ function roundService:_start()
 
 	task.spawn(function()
 		while true do
-			if #Players:GetPlayers() < 2 then
+			if #Players:GetPlayers() < 2 then -- Check if there are more than 2 players
 				self:_updateRoundStateLabel("Not enough players to start")
 				task.wait(0.1)
 				continue
@@ -366,7 +382,7 @@ function roundService:_start()
 			-- Voting
 			RoundData.RoundState = "Vote"
 			
-			self:_assignMapsToVoteButtons()
+			self:_assignMapsToVoteButtons() -- Refresh the vote buttons with new maps
 			
 			for i = votingDuration, 0, -1 do
 				self:_updateRoundStateLabel(string.format("Vote for a map: %ds", i))
@@ -411,13 +427,13 @@ function roundService:_start()
 			RoundData.RoundState = "Round"
 			
 			for player, roleName in RoundData.RoleRegistry do
-				if not self:_assignRoleWeapon(player, roleName) then
+				if not self:_assignRoleWeapon(player, roleName) then -- Assign the role weapons
 					warn("Failed to assign role for player: "..player.Name)
-					if roleName == "Murderer" or roleName == "Sheriff" then self:_cleanUpRound() else self:RemovePlayerFromRound(player) end
+					if roleName == "Murderer" or roleName == "Sheriff" then self:_cleanUpRound() else self:RemovePlayerFromRound(player) end 
 				end
 			end
 			
-			local roundWinner = "Innocents" 
+			local roundWinner = "Innocents" -- Default winner
 			local roundWinnerPlayer = nil
 			
 			for i = roundDuration, 1, -1 do
@@ -430,12 +446,12 @@ function roundService:_start()
 					self:_updateRoundStateLabel(string.format("Round ends in: %02ds", seconds), true)
 				end
 
-				if not RoundData:GetMurderer() then
+				if not RoundData:GetMurderer() then -- If the murderer could not be found (Shot by the sheriff or left the game)
 					roundWinner = "Sheriff"
 					break
 				end
 
-				if #RoundData.ActivePlayers <= 1 then
+				if #RoundData.ActivePlayers <= 1 then -- If there is only one player remaining 
 					local lastPlayer = RoundData.ActivePlayers[1]
 					
 					if lastPlayer then
@@ -461,12 +477,12 @@ function roundService:_start()
 				self:_updateRoundStateLabel(RoundConfig.WinMessages.Innocents)
 			end
 			
-			RoundData.RoundState = "DisplayWinner"
+			RoundData.RoundState = "DisplayWinner" 
 			
 			-- Round ended here
 			if roundWinner ~= "Innocents" and roundWinnerPlayer then
 				for _, player in Players:GetPlayers() do
-					SpectateService:SpectatePlayer(player, roundWinnerPlayer)
+					SpectateService:SpectatePlayer(player, roundWinnerPlayer) -- Display the winner with spectate service 
 				end
 			end
 			
@@ -485,7 +501,7 @@ function roundService:_start()
 		end
 	end)
 	
-	Players.PlayerRemoving:Connect(function(player)
+	Players.PlayerRemoving:Connect(function(player) -- Clean up
 		local playerIndex = table.find(RoundData.ActivePlayers, player)
 		
 		if playerIndex then
