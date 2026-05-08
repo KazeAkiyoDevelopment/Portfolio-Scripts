@@ -1,14 +1,17 @@
 local tradeService = {}
 
+-- Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 local HttpService = game:GetService("HttpService")
 
+-- OOP Class
 local TradeClass = require(script.TradeClass)
 
 local TradingRemotes = ReplicatedStorage.Shared.Remotes.TradingRemotes
 
+-- CONFIG
 local TRADE_REQUEST_TIMEOUT = 30
 local MAX_TRADING_SLOTS = 9
 
@@ -16,11 +19,11 @@ local PendingTradeRequests = {} -- [playerName] = {[tradeID] = true}
 local ActiveTradesByPlayer = {} -- [playerName] = tradeID
 local Trades = {}               -- [tradeID] = TradeClass
 
-function tradeService:_getTrade(tradeID: string)
+function tradeService:_getTrade(tradeID: string) -- Find a trade based on a GUID
 	return Trades[tradeID]
 end
 
-function tradeService:_snapshotInventory(petsFolder: Folder)
+function tradeService:_snapshotInventory(petsFolder: Folder) -- Snapshot the players' inventory at the start of the trade (We will use this to "fact check" it later)
 	local snapshot = {}
 	for _, pet in ipairs(petsFolder:GetChildren()) do
 		snapshot[pet:GetAttribute("ID")] = pet.Name
@@ -28,7 +31,7 @@ function tradeService:_snapshotInventory(petsFolder: Folder)
 	return snapshot
 end
 
-function tradeService:_cleanUp(tradeID: string)
+function tradeService:_cleanUp(tradeID: string) -- Clean up the trade
 	local trade = Trades[tradeID]
 	if not trade then return end
 
@@ -38,7 +41,7 @@ function tradeService:_cleanUp(tradeID: string)
 	Trades[tradeID] = nil
 end
 
-function tradeService:_forceEnd(tradeID: string, ...)
+function tradeService:_forceEnd(tradeID: string, ...) -- Force end the trade
 	local trade = Trades[tradeID]
 	if not trade then return end
 
@@ -46,7 +49,7 @@ function tradeService:_forceEnd(tradeID: string, ...)
 	self:_cleanUp(tradeID)
 end
 
-function tradeService:_finalize(tradeID: string)
+function tradeService:_finalize(tradeID: string) -- Finalize the trade
 	local trade = Trades[tradeID]
 	if not trade then return end
 
@@ -57,17 +60,17 @@ function tradeService:_finalize(tradeID: string)
 	self:_cleanUp(tradeID)
 end
 
-function tradeService:_removePendingRequest(playerName: string, tradeID: string)
+function tradeService:_removePendingRequest(playerName: string, tradeID: string) -- Clear the pending trade request
 	local set = PendingTradeRequests[playerName]
 	if set then set[tradeID] = nil end
 end
 
-function tradeService:_clearPendingForTrade(trade, tradeID: string)
+function tradeService:_clearPendingForTrade(trade, tradeID: string) -- Clear all pending requests for BOTH players
 	self:_removePendingRequest(trade.Initiator, tradeID)
 	self:_removePendingRequest(trade.Receiver,  tradeID)
 end
 
-function tradeService:_pendingRequestExists(initiatorName: string, receiverName: string)
+function tradeService:_pendingRequestExists(initiatorName: string, receiverName: string) -- Checks if the player has a pending trade request
 	local set = PendingTradeRequests[initiatorName]
 	if not set then return false end
 
@@ -84,7 +87,7 @@ function tradeService:_onTradeRequest(player: Player, receiverName: string)
 
 	local playerName = player.Name
 
-	if ActiveTradesByPlayer[playerName] then
+	if ActiveTradesByPlayer[playerName] then -- A guard to prevent getting new trade requests while in an active trade
 		TradingRemotes.UpdateTradeGUI:FireClient(player, {
 			UpdateType = "TradeError",
 			Message    = "You are already in an active trade!",
@@ -92,7 +95,7 @@ function tradeService:_onTradeRequest(player: Player, receiverName: string)
 		return
 	end
 
-	if ActiveTradesByPlayer[receiverName] then
+	if ActiveTradesByPlayer[receiverName] then -- Notify the "Sender" that the player they want to trade is in an active trade
 		TradingRemotes.UpdateTradeGUI:FireClient(player, {
 			UpdateType = "TradeError",
 			Message    = receiverName .. " is already in an active trade!",
@@ -100,7 +103,7 @@ function tradeService:_onTradeRequest(player: Player, receiverName: string)
 		return
 	end
 
-	if self:_pendingRequestExists(playerName, receiverName) then
+	if self:_pendingRequestExists(playerName, receiverName) then -- Prevent spam trading the same player
 		TradingRemotes.UpdateTradeGUI:FireClient(player, {
 			UpdateType = "TradeError",
 			Message    = "You already have a pending request with " .. receiverName .. "!",
@@ -111,6 +114,7 @@ function tradeService:_onTradeRequest(player: Player, receiverName: string)
 	local receiver = Players:FindFirstChild(receiverName)
 	if not receiver or receiver == player then return end
 
+	-- Set up the trade
 	local tradeID = HttpService:GenerateGUID(false)
 	local trade = TradeClass.new(tradeID, playerName, receiverName)
 	Trades[tradeID] = trade
@@ -123,7 +127,7 @@ function tradeService:_onTradeRequest(player: Player, receiverName: string)
 
 	TradingRemotes.TradeRequestReceived:FireClient(receiver, playerName, tradeID)
 
-	task.delay(TRADE_REQUEST_TIMEOUT, function()
+	task.delay(TRADE_REQUEST_TIMEOUT, function() -- Add a timeout for trade requests
 		local trade = Trades[tradeID]
 		if not trade or trade.Status ~= "Pending" then return end
 
@@ -162,7 +166,7 @@ function tradeService:_onTradeRequestResponse(player: Player, accepted: boolean,
 
 	self:_clearPendingForTrade(trade, tradeID)
 
-	if not accepted then
+	if not accepted then -- If the "Receiver" declinded the trade request
 		Trades[tradeID] = nil
 
 		local initiator = Players:FindFirstChild(trade.Initiator)
@@ -176,7 +180,7 @@ function tradeService:_onTradeRequestResponse(player: Player, accepted: boolean,
 	end
 
 	local initiator = Players:FindFirstChild(trade.Initiator)
-	if not initiator then
+	if not initiator then -- Guard in case the "Sender" left the game by the time the "Receiver" accepted the trade
 		Trades[tradeID] = nil
 		TradingRemotes.UpdateTradeGUI:FireClient(player, {
 			UpdateType = "TradeError",
@@ -216,6 +220,7 @@ function tradeService:_onTradeRequestResponse(player: Player, accepted: boolean,
 	end
 	PendingTradeRequests[trade.Receiver] = {}
 
+	-- Inventory snapshotting
 	trade.Inventories[trade.Initiator] = self:_snapshotInventory(initiator.Pets)
 	trade.Inventories[trade.Receiver]  = self:_snapshotInventory(player.Pets)
 
@@ -224,6 +229,7 @@ function tradeService:_onTradeRequestResponse(player: Player, accepted: boolean,
 	ActiveTradesByPlayer[trade.Initiator] = tradeID
 	ActiveTradesByPlayer[trade.Receiver]  = tradeID
 
+	-- Sync the clients' GUI
 	trade:SyncGUI({
 		UpdateType = "TradeRequestAccepted",
 		TradeID    = tradeID,
@@ -234,16 +240,17 @@ function tradeService:_onTradeRequestResponse(player: Player, accepted: boolean,
 	return true
 end
 
-function tradeService:_onAcceptTrade(player: Player, tradeID: string)
+function tradeService:_onAcceptTrade(player: Player, tradeID: string) -- When a player accepts the trade offer
 	if typeof(tradeID) ~= "string" then return end
 
+	-- Guards
 	local trade = self:_getTrade(tradeID)
 	if not trade or trade.Status ~= "Active" then return end
 	if ActiveTradesByPlayer[player.Name] ~= tradeID then return end
 	if trade.Accepted[player.Name] then return end
 	if trade.LockedFinalization then return end
 
-	if trade:IsEmpty() then
+	if trade:IsEmpty() then -- If the trade is empty
 		TradingRemotes.UpdateTradeGUI:FireClient(player, {
 			UpdateType = "TradeError",
 			Message    = "At least one pet must be offered!",
@@ -254,7 +261,7 @@ function tradeService:_onAcceptTrade(player: Player, tradeID: string)
 	trade.Accepted[player.Name] = true
 	trade:SyncGUI({UpdateType = "PlayerAccepted", Player = player.Name})
 
-	if trade:BothAccepted() then
+	if trade:BothAccepted() then -- Once both players accept
 		trade.LockedFinalization = true
 		trade:StartCountdown(
 			function(id) self:_finalize(id) end,
@@ -263,7 +270,7 @@ function tradeService:_onAcceptTrade(player: Player, tradeID: string)
 	end
 end
 
-function tradeService:_onDeclineTrade(player: Player, tradeID: string)
+function tradeService:_onDeclineTrade(player: Player, tradeID: string) -- If the active trade offer was declined
 	if typeof(tradeID) ~= "string" then return end
 
 	local trade = self:_getTrade(tradeID)
@@ -272,9 +279,10 @@ function tradeService:_onDeclineTrade(player: Player, tradeID: string)
 	self:_forceEnd(tradeID, player.Name .. " declined the trade!")
 end
 
-function tradeService:_onAddToTrade(player: Player, tradeID: string, petID: string)
+function tradeService:_onAddToTrade(player: Player, tradeID: string, petID: string) -- If a player adds a new pet to the trade offer
 	if typeof(tradeID) ~= "string" or typeof(petID) ~= "string" then return end
 
+	-- Guards
 	local trade = self:_getTrade(tradeID)
 	if not trade or trade.Status ~= "Active" then return end
 	if ActiveTradesByPlayer[player.Name] ~= tradeID then return end
@@ -283,7 +291,7 @@ function tradeService:_onAddToTrade(player: Player, tradeID: string, petID: stri
 	local success, reason = trade:AddOffer(player.Name, petID)
 
 	if not success then
-		if reason == "full" then
+		if reason == "full" then -- If the trade offer exceeds the MAX_TRADING_SLOTS we will prevent adding more pets
 			TradingRemotes.UpdateTradeGUI:FireClient(player, {
 				UpdateType = "TradeError",
 				Message    = "You can only offer up to " .. MAX_TRADING_SLOTS .. " pets!",
@@ -292,7 +300,9 @@ function tradeService:_onAddToTrade(player: Player, tradeID: string, petID: stri
 		return
 	end
 
-	trade:ResetAccepted()
+	trade:ResetAccepted() -- Reset both players accept state if a new pet was added 
+
+	-- GUI Update
 	trade:SyncGUI({
 		UpdateType = "AddPet",
 		Player     = player.Name,
@@ -303,9 +313,10 @@ function tradeService:_onAddToTrade(player: Player, tradeID: string, petID: stri
 	return true
 end
 
-function tradeService:_onRemoveFromTrade(player: Player, tradeID: string, petID: string)
+function tradeService:_onRemoveFromTrade(player: Player, tradeID: string, petID: string) -- If a player removes a pet from the trade offer
 	if typeof(tradeID) ~= "string" or typeof(petID) ~= "string" then return end
 
+	-- Guards
 	local trade = self:_getTrade(tradeID)
 	if not trade or trade.Status ~= "Active" then return end
 	if ActiveTradesByPlayer[player.Name] ~= tradeID then return end
@@ -313,7 +324,9 @@ function tradeService:_onRemoveFromTrade(player: Player, tradeID: string, petID:
 
 	if not trade:RemoveOffer(player.Name, petID) then return end
 
-	trade:ResetAccepted()
+	trade:ResetAccepted() -- Reset both players accept state if a pet was removed
+
+	-- GUI Update
 	trade:SyncGUI({
 		UpdateType = "RemovePet",
 		Player     = player.Name,
@@ -324,10 +337,10 @@ function tradeService:_onRemoveFromTrade(player: Player, tradeID: string, petID:
 	return true
 end
 
-function tradeService:_onPlayerRemoving(player: Player)
+function tradeService:_onPlayerRemoving(player: Player) -- When the player leaves the game
 	local playerName = player.Name
 
-	for tradeID in pairs(PendingTradeRequests[playerName] or {}) do
+	for tradeID in pairs(PendingTradeRequests[playerName] or {}) do -- Check if they have a pending trade request
 		local trade = Trades[tradeID]
 		if trade then
 			local otherName   = trade.Initiator == playerName and trade.Receiver or trade.Initiator
@@ -335,7 +348,7 @@ function tradeService:_onPlayerRemoving(player: Player)
 
 			self:_removePendingRequest(otherName, tradeID)
 
-			if otherPlayer then
+			if otherPlayer then -- Notify the sender 
 				TradingRemotes.UpdateTradeGUI:FireClient(otherPlayer, {
 					UpdateType = "TradeError",
 					Message    = playerName .. " left the game.",
@@ -349,12 +362,12 @@ function tradeService:_onPlayerRemoving(player: Player)
 	PendingTradeRequests[playerName] = nil
 
 	local activeID = ActiveTradesByPlayer[playerName]
-	if activeID then
+	if activeID then -- Clear the active trade if there is one 
 		self:_forceEnd(activeID, playerName .. " left the game!")
 	end
 end
 
-function tradeService:IsInActiveTrade(player: Player)
+function tradeService:IsInActiveTrade(player: Player) -- Get the active trade
 	return ActiveTradesByPlayer[player.Name] ~= nil
 end
 
